@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "observation-swap"
+version = "0.1.0"
+description = "Compare cross-window recurrence across two labelled observation processes"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "pandas>=2.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+ais = ["pyarrow>=12"]
+
+[project.scripts]
+observation-swap = "observation_swap.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["observation_swap*"]
