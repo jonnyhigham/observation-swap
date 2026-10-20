@@ -37,6 +37,26 @@ Every correlation for a window pair is computed on **one common cohort**: units
 eligible in all four process-by-window cells. Without that, the comparison
 confounds sample composition with the effect under test.
 
+## What it adds to established measurement practice
+
+Cross-method validation and longitudinal method-effect models have a long
+history (Campbell & Fiske, 1959; Koch et al., 2014). This package implements a
+small support-matched audit; it does not introduce a new general identification
+principle or replace a well-identified latent-variable design.
+
+Version 0.2 adds a common-scale companion:
+
+```
+covariance_gap = Cov(A_window1 - B_window1, A_window2 - B_window2) / 2
+```
+
+This elementary identity targets recurring measurement differences. Under an
+additive common-signal model with cross-window independent noise, it equals
+half the variance of the persistent process difference, even with unequal
+precision or correlated process biases. Shared bias remains invisible and
+unequal response slopes can contribute to it. It is not a causal bias fraction.
+Mean differences matter too: correlation is insensitive to constant offsets.
+
 ## Install
 
 ```bash
@@ -60,9 +80,11 @@ result = swap_test(
     value="activity_rate",   # the per-unit statistic
     weight="n_detections",   # optional: how much each cell rests on
     min_weight=10,
+    pooled_bootstrap=True,  # joint intervals retaining unit histories
 )
 print(result.report())
-print(result.gap, result.gap_share)
+print(result.gap, result.gap_share, result.gap_ci)
+print(result.summary["covariance_gap"])
 result.to_frame()            # per-window-pair table
 ```
 
@@ -130,6 +152,13 @@ Alongside the gap you get:
   thing. Used for a model-conditional independent-error correction
   (`disattenuated_swapped`), and a low value is flagged.
 - **Per-pair bootstrap intervals**, resampling units.
+- **Joint intervals** when `pooled_bootstrap=True`: units are resampled once
+  per draw across all pair cohorts, preserving their histories. `gap_ci` returns
+  this interval when requested, otherwise `(None, None)`. The legacy JSON
+  `summary["gap_ci"]` field remains a labelled *spread of pair estimates*, not
+  a confidence interval. No extra precision is gained by repeating the same
+  pair. These intervals condition on eligibility and do not model spatial
+  dependence unless handled in the calling analysis.
 - **A sparsity profile.** Each cohort is split at the median of its minimum cell
   weight. The split is descriptive: precision and cohort composition can both affect it.
   It does not test selection of units excluded from the common cohort.
@@ -154,6 +183,28 @@ Read these before quoting a gap.
   unequal precision or correlated biases can alter or cancel the contrast. A
   small combined gap cannot separately bound receiver and instrument effects.
 - **Window pairs share units** and are not independent replicates.
+
+## Reproduce the public air-quality example
+
+```bash
+python examples/epa_pm25.py --data-dir epa_airdata --output-dir epa_output
+```
+
+The example downloads EPA daily data for 2021/2022, chooses streams by support,
+uses matched dates, and reports two distinct comparisons: FRM/FEM versus
+non-FRM/FEM reporting classes, and original versus corrected Teledyne processing.
+It follows the EPA correction advisory and records a linkage amendment for the
+observed corrected POC offset. It includes a fixed cohort, event-exclusion and
+state-cluster sensitivity. No study datasets are bundled in this repository.
+
+The calibration comparison is intentionally **not independent instrumentation**.
+It reprocesses the same observations. Its relative correlation gap is about
+0.23% even though the median site-mean change is 1.12 micrograms/cubic metre
+and differences recur across quarters. Transfer of recurrence and persistent
+measurement differences can coexist; neither process is assumed error free.
+
+EPA sources: [daily files](https://aqs.epa.gov/aqsweb/airdata/download_files.html),
+[correction advisory](https://aqs.epa.gov/aqsweb/airdata/Data_Advisory_PM25_88101_Pregen_Files.pdf).
 
 ## Origin
 

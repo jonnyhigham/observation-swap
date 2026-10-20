@@ -77,6 +77,9 @@ def _estimates(m: np.ndarray) -> dict[str, float]:
         if np.isfinite(reliability) and reliability > 0
         else np.nan
     )
+    cov = np.cov(m, rowvar=False, ddof=1)
+    d1, d2 = m[:, 0] - m[:, 1], m[:, 2] - m[:, 3]
+    covariance_gap = 0.5 * (cov[0, 2] + cov[1, 3] - cov[0, 3] - cov[1, 2])
     return {
         "r_same_window_w1": same_w1,
         "r_same_window_w2": same_w2,
@@ -88,7 +91,46 @@ def _estimates(m: np.ndarray) -> dict[str, float]:
         "gap_B": bb - ba,
         "gap": 0.5 * ((aa - ab) + (bb - ba)),
         "disattenuated_swapped": disatt,
+        "covariance_gap": float(covariance_gap),
+        "difference_recurrence": _pearson(np.column_stack((d1, d2)), 0, 1),
+        "mean_process_difference_w1": float(d1.mean()),
+        "mean_process_difference_w2": float(d2.mean()),
     }
+
+
+def _pooled_bootstrap(pair_data, n_boot, rng):
+    """Resample each unit's whole history jointly across the fixed pair cohorts.
+
+    Unlike a percentile spread across pair estimates, these intervals retain
+    dependence from reusing units/windows. They condition on original eligibility.
+    """
+    keys = sorted(set().union(*(set(ids) for ids, _ in pair_data)))
+    loc = {key: i for i, key in enumerate(keys)}
+    matrices = []
+    for ids, matrix in pair_data:
+        full = np.full((len(keys), 4), np.nan)
+        full[[loc[key] for key in ids]] = matrix
+        matrices.append(full)
+    draws = {k: [] for k in ("gap", "covariance_gap", "difference_recurrence")}
+    for _ in range(n_boot):
+        chosen = rng.integers(0, len(keys), len(keys))
+        estimates = []
+        for full in matrices:
+            m = full[chosen]
+            m = m[np.isfinite(m).all(axis=1)]
+            if len(m) < 3:
+                estimates = []
+                break
+            estimates.append(_estimates(m))
+        if not estimates:
+            continue
+        for key in draws:
+            vals = [e[key] for e in estimates]
+            if np.isfinite(vals).all():
+                draws[key].append(float(np.mean(vals)))
+    return {key: {"lo": float(np.percentile(v, 2.5)) if len(v)>1 else None,
+                  "hi": float(np.percentile(v, 97.5)) if len(v)>1 else None,
+                  "n_draws": len(v)} for key, v in draws.items()}
 
 
 def _bootstrap(m: np.ndarray, n_boot: int, rng: np.random.Generator) -> dict[str, dict]:
@@ -128,7 +170,8 @@ class SwapResult:
 
     @property
     def gap_ci(self) -> tuple[float | None, float | None]:
-        ci = self.summary.get("gap_ci") or {}
+        """Joint whole-unit interval if requested; pair spread is not an interval."""
+        ci = (self.summary.get("pooled_bootstrap") or {}).get("gap") or {}
         return ci.get("lo"), ci.get("hi")
 
     @property
@@ -207,6 +250,7 @@ def swap_test(
     n_boot: int = 2000,
     min_units: int = 30,
     sparsity_split: bool = True,
+    pooled_bootstrap: bool = False,
     seed: int = 0,
 ) -> SwapResult:
     """Run the observation-swap test.
@@ -243,6 +287,9 @@ def swap_test(
         can both change the contrast.
     seed
         Base seed. Each window pair uses a distinct derived seed.
+    pooled_bootstrap
+        Also resample complete unit histories jointly across pairs to obtain
+        intervals for equal-pair mean contrasts. Conditions on original cohorts.
 
     Returns
     -------
@@ -288,7 +335,7 @@ def swap_test(
 
     if windows is None:
         windows = sorted(df[window].dropna().unique())
-    windows = list(windows)
+    windows = [w.item() if isinstance(w, np.generic) else w for w in windows]
     if len(windows) < 2:
         raise ValueError("need at least two windows")
 
@@ -297,6 +344,7 @@ def swap_test(
     )
 
     pairs: list[dict[str, Any]] = []
+    pair_data = []
     for i, w1 in enumerate(windows):
         for w2 in windows[i + 1 :]:
             try:
@@ -314,6 +362,7 @@ def swap_test(
                 continue
 
             m = fn(sub.loc[:, cols_v].to_numpy(dtype=float))
+            pair_data.append((list(sub.index), m))
             seed_bytes = repr((seed, str(w1), str(w2))).encode("utf-8")
             pair_seed = int.from_bytes(hashlib.sha256(seed_bytes).digest()[:8], "big")
             rng = np.random.default_rng(pair_seed)
@@ -374,6 +423,8 @@ def swap_test(
             "r_same_window_w1", "r_same_process_A", "r_same_process_B",
             "r_swapped_A_to_B", "r_swapped_B_to_A", "gap_A", "gap_B", "gap",
             "disattenuated_swapped")},
+        **{k: mean_of(k) for k in ("covariance_gap", "difference_recurrence",
+            "mean_process_difference_w1", "mean_process_difference_w2")},
         "gap_ci": {
             "lo": float(np.percentile(gaps, 2.5)) if gaps.size > 1 else None,
             "hi": float(np.percentile(gaps, 97.5)) if gaps.size > 1 else None,
@@ -382,6 +433,12 @@ def swap_test(
         "gap_as_share_of_same_process": float(gap_mean / same) if same else None,
         "n_pairs_gap_interval_excludes_zero": n_excl,
     }
+    if pooled_bootstrap and n_boot > 0:
+        summary["pooled_bootstrap"] = _pooled_bootstrap(
+            pair_data, n_boot, np.random.default_rng(seed))
+        summary["pooled_bootstrap_basis"] = (
+            "whole-unit histories resampled jointly across fixed eligible pair cohorts; "
+            "equal-pair means; conditional on eligibility; no spatial correction")
     if sparsity_split:
         sp = [p["sparsity"]["sparse"].get("gap") for p in scored
               if "sparsity" in p and "gap" in p["sparsity"].get("sparse", {})]
@@ -412,6 +469,7 @@ def _design(ns: dict) -> dict[str, Any]:
         "transform": ns.get("transform"),
         "n_boot": ns.get("n_boot"),
         "seed": ns.get("seed"),
+        "pooled_bootstrap": ns.get("pooled_bootstrap"),
         "estimand": (
             "gap = r(same process across windows) - r(process swapped across "
             "windows), on a common cohort eligible in all four "

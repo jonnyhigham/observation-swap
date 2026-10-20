@@ -28,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--min-units", type=int, default=30)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--pooled-bootstrap", action="store_true",
+                    help="joint whole-unit bootstrap for equal-pair mean contrasts")
     ap.add_argument("--json", type=Path, default=None, help="also write the full result here")
     a = ap.parse_args(argv)
 
@@ -37,6 +39,7 @@ def main(argv: list[str] | None = None) -> int:
         df, unit=a.unit, window=a.window, process=a.process, value=a.value,
         weight=a.weight, min_weight=a.min_weight, transform=a.transform,
         n_boot=a.n_boot, min_units=a.min_units, seed=a.seed,
+        pooled_bootstrap=a.pooled_bootstrap,
     )
     print(res.report())
     if a.json:

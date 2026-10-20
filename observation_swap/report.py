@@ -48,7 +48,7 @@ def render(result: "SwapResult") -> str:
     lo, hi = result.gap_ci
     share = s.get("gap_as_share_of_same_process")
     out.append(f"  GAP  {_f(gap)}"
-               + (f"   (pair spread {_f(lo)} to {_f(hi)})" if lo is not None else ""))
+               + (f"   (joint 95% interval {_f(lo)} to {_f(hi)})" if lo is not None else ""))
     if share is not None:
         out.append(f"       {share:.2%} of same-process recurrence")
     out.append(f"       interval excludes zero in "
@@ -57,6 +57,19 @@ def render(result: "SwapResult") -> str:
         out.append(f"       swapped recurrence under independent-error correction: "
                    f"{s['disattenuated_swapped']:.4f}")
     out.append("")
+
+    if s.get("covariance_gap") is not None:
+        out.append(f"  Difference covariance / 2  {_f(s['covariance_gap'])}")
+        out.append(f"  Difference recurrence      {_f(s.get('difference_recurrence'), '.4f')}")
+        out.append("  Covariance uses squared outcome units; compare only on a meaningful common scale.")
+        pooled = s.get("pooled_bootstrap") or {}
+        if pooled:
+            out.append("  Joint whole-unit bootstrap intervals for mean contrasts:")
+            for key in ("gap", "covariance_gap", "difference_recurrence"):
+                ci = pooled.get(key) or {}
+                out.append(f"    {key}: {_f(ci.get('lo'))} to {_f(ci.get('hi'))} "
+                           f"({ci.get('n_draws', 0)} valid draws)")
+        out.append("")
 
     sp, dn = s.get("sparsity_gap_sparse_half"), s.get("sparsity_gap_dense_half")
     if sp is not None and dn is not None:
@@ -70,12 +83,10 @@ def render(result: "SwapResult") -> str:
         out.append("")
 
     out.append("Reading")
-    if share is not None and abs(share) < 0.10:
-        out.append("  Recurrence transfers across the processes with a small relative contrast.")
-    elif share is not None and share > 0.40:
-        out.append("  Recurrence falls substantially when the process is swapped.")
-    else:
-        out.append("  The gap describes how recurrence changes when the process is swapped.")
+    out.append("  The gap describes how recurrence changes when the process is swapped.")
+    out.append("  No equivalence margin is assumed. Report mean differences and differential")
+    out.append("  recurrence as well as transfer; a small correlation contrast can coexist")
+    out.append("  with a persistent calibration change.")
     out.append("  Shared observation bias can survive the swap. Unequal precision and")
     out.append("  correlated process biases can also change the gap. This is not generally")
     out.append("  a causal attributable fraction or an upper bound on observation bias.")

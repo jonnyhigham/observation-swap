@@ -157,3 +157,45 @@ print(json.dumps(r.pairs[0]["bootstrap"]))'''
                env={**os.environ, "PYTHONHASHSEED": str(s)}, text=True)
                for s in [1, 123]]
     assert json.loads(outputs[0]) == json.loads(outputs[1])
+
+
+def test_covariance_contrast_is_half_covariance_of_process_differences():
+    from observation_swap.core import _estimates
+    rng = np.random.default_rng(42)
+    m = rng.normal(size=(400, 4)) * [1., 4., 2., 3.]
+    e = _estimates(m)
+    expected = np.cov(m[:,0]-m[:,1], m[:,2]-m[:,3], ddof=1)[0,1]/2
+    assert e['covariance_gap'] == pytest.approx(expected, abs=1e-12)
+    assert _estimates(7*m)['covariance_gap'] == pytest.approx(49*expected)
+
+
+def test_covariance_contrast_removes_unequal_independent_noise_artefact():
+    from observation_swap.core import _estimates
+    z = 2*((np.arange(32)[:,None] >> np.arange(5)) & 1)-1
+    m = np.column_stack([z[:,0]+.35*z[:,1], z[:,0]+1.4*z[:,2],
+                         z[:,0]+.35*z[:,3], z[:,0]+1.4*z[:,4]])
+    e = _estimates(m)
+    assert e['gap'] > .06
+    assert abs(e['covariance_gap']) < 1e-12
+
+
+def test_joint_bootstrap_does_not_count_reused_pairs_as_new_units():
+    from observation_swap.core import _pooled_bootstrap
+    rng = np.random.default_rng(8)
+    m = rng.normal(size=(50,4))
+    ids = [f'u{i}' for i in range(50)]
+    one = _pooled_bootstrap([(ids,m)], 100, np.random.default_rng(4))
+    repeated = _pooled_bootstrap([(ids,m)]*10, 100, np.random.default_rng(4))
+    for key in one:
+        assert repeated[key]['lo'] == pytest.approx(one[key]['lo'])
+        assert repeated[key]['hi'] == pytest.approx(one[key]['hi'])
+
+
+def test_correlated_process_bias_targets_the_difference_not_total_bias():
+    from observation_swap.core import _estimates
+    z = 2*((np.arange(8)[:,None] >> np.arange(3)) & 1)-1
+    a = z[:,0]+z[:,1]
+    b = z[:,0]+.8*z[:,1]+.6*z[:,2]
+    e = _estimates(np.column_stack([a,b,a,b]))
+    # Both biases have variance one, but their differential contrast is .2.
+    assert e['covariance_gap'] == pytest.approx(.2*8/7)
